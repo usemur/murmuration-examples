@@ -25,7 +25,7 @@ let extractedText = null;
 
 // PDF mode: extract text first, then embed it
 if (params.pdf_base64) {
-  const extractRes = await fetch('https://murmuration-pdf-extract.fly.dev/extract', {
+  const extractRes = await fetch('https://flows-pdf-extract.fly.dev/extract', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ pdf_base64: params.pdf_base64 }),

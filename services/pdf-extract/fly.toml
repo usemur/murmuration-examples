@@ -1,4 +1,4 @@
-app = 'murmuration-pdf-extract'
+app = 'flows-pdf-extract'
 primary_region = 'sjc'
 
 [build]

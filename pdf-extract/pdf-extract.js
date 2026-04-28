@@ -14,7 +14,7 @@ if (!pdfBase64) {
   throw new Error('Missing pdf_base64');
 }
 
-const res = await fetch('https://murmuration-pdf-extract.fly.dev/extract', {
+const res = await fetch('https://flows-pdf-extract.fly.dev/extract', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ pdf_base64: pdfBase64 }),
