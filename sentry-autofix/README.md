@@ -11,27 +11,21 @@ webhook into the Mur platform, not via direct `/invoke` like
 `twenty-deployer` or `dead-drop`. There's no MCP wiring; once the
 flow is enabled and configured, every new Sentry issue runs through it.
 
-> **Status: operator-only during dogfood.** The webhook route
-> verifies every delivery against a single platform-wide
-> `SENTRY_CLIENT_SECRET` and attributes events to a single
-> `SENTRY_DEFAULT_DEVELOPER_ID`. That means *one* Sentry org per
-> Mur deployment can use this flow today. The install + config
-> endpoints both 403 for any non-operator developer.
->
-> **What unlocks multi-tenant:** a public Sentry Integration with
-> OAuth so each customer's install gives us a per-org client_id /
-> client_secret pair, plus a `SentryInstallation` table keyed by
-> `data.installation.uuid` to resolve the right developer at
-> webhook ingest. Until that ships, the per-customer install flow
-> below is the **operator's** path on a Mur deployment — not
-> something a third party can run on `usemur.dev`.
+> **Auth model during dogfood.** Each developer mints a per-account
+> `sentryWebhookToken` at install time and pastes
+> `<base>/api/webhooks/sentry/t/<token>` into a Sentry Internal
+> Integration in their own org. URL secrecy is the auth — no HMAC.
+> The Sentry auth token from that integration goes into the user's
+> Mur vault as `SENTRY_TOKEN` (used by the agent for richer issue
+> context). HMAC verification can be layered on later when we
+> graduate to a public Sentry Integration with OAuth.
 
 ## Pipeline
 
 ```
 Sentry issue.created webhook
          ↓
-POST /api/webhooks/sentry  (HMAC-verified, request-id-deduped)
+POST /api/webhooks/sentry/t/<devToken>  (URL-token attributed, request-id-deduped)
          ↓
 sentry.handler.ts
   ├── atomic claim by Sentry issue id (one PR per bug)
@@ -50,47 +44,24 @@ PR appears, authored by mur[bot]
 
 ## Setup checklist
 
-The setup below assumes you are the **operator** of a Mur
-deployment (e.g. the Lit team running `usemur.dev`, or someone
-running their own self-hosted Mur). If you're trying to install
-this on an existing public Mur deployment as a normal customer,
-the install endpoint will 403 — see the Status note above.
-
 You need three things to be true:
 
 1. **The Mur GitHub App is installed on your target repo** — already
    handled if you ran `/mur connect github` and selected the repo (or
    went through the cofounder install flow). The App needs
    `pull_requests:write` + `contents:write`.
-2. **A Sentry Internal Integration exists** with its webhook pointed
-   at `https://<your-mur-deployment>/api/webhooks/sentry`.
+2. **A Sentry Internal Integration exists** in your Sentry org with
+   its webhook pointed at the per-developer URL Mur returned in the
+   install response (`<base>/api/webhooks/sentry/t/<token>`).
 3. **A Sentry-project → GitHub-repo mapping is configured** so the
    agent knows which repo to clone when an error fires.
 
 The rest of this README walks you through the parts you do.
 
-## Step 1 — Sentry side
+## Step 1 — install the flow
 
-In your Sentry org's dashboard:
-
-1. **Settings → Custom Integrations → Create New Integration → Internal**
-2. **Name:** "Mur Autofix" (or whatever)
-3. **Webhook URL:** `<your-mur-base-url>/api/webhooks/sentry` —
-   replace with your deployment's base URL (`https://usemur.dev`
-   for the hosted deployment, otherwise whatever you set up).
-4. **Permissions:** `Issue & Event: Read` is the minimum. Add
-   `Issue & Event: Read & Write` if you want the agent to mark issues
-   resolved when its PR merges (future feature).
-5. **Webhooks:** subscribe to **Issues**. The flow specifically listens
-   for `issue.created`.
-6. **Save.** Copy the **Client Secret** at the top of the integration
-   page — that's the HMAC signing secret Sentry uses to sign every
-   outgoing webhook.
-
-Hand the Client Secret to the Mur operator (or set it yourself if you
-self-host) — it goes into `SENTRY_CLIENT_SECRET` on the platform.
-
-## Step 2 — install the flow
+Run the install first — the response includes the per-developer
+webhook URL and a deeplink to your vault that you'll use in step 2.
 
 The curl examples below use `$MUR_API_BASE` and `$MUR_API_KEY`.
 Set them once before running anything:
@@ -119,8 +90,31 @@ curl -X POST $MUR_API_BASE/api/flows/install \
 Or just say `/mur install sentry-autofix` to your coding agent and it'll
 walk through it.
 
-This flips the per-project `enabled` gate. Without it, the handler
-returns `flow_not_enabled` and nothing happens.
+The 201 response includes `setupInstructions.webhookUrl`,
+`setupInstructions.vaultUrl`, and `setupInstructions.steps[]` —
+copy the webhook URL and the vault deeplink for the next step. The
+install also flips the per-project `enabled` gate; without it the
+handler returns `flow_not_enabled` and nothing happens.
+
+## Step 2 — Sentry side + paste your token
+
+In your Sentry org's dashboard:
+
+1. **Settings → Custom Integrations → Create New Integration → Internal**
+2. **Name:** "Mur Autofix" (or whatever)
+3. **Webhook URL:** the `setupInstructions.webhookUrl` from the
+   install response (`<base>/api/webhooks/sentry/t/<token>`). This
+   URL is per-developer — don't share it.
+4. **Permissions:** `Issue & Event: Read` is the minimum. Add
+   `Issue & Event: Read & Write` if you want the agent to mark issues
+   resolved when its PR merges (future feature).
+5. **Webhooks:** subscribe to **Issues**. The flow specifically listens
+   for `issue.created`.
+6. **Save.** Copy the integration's **auth token** shown after
+   creation.
+7. Open `setupInstructions.vaultUrl` in your browser — it deeplinks to
+   the Mur vault with the secret name (`SENTRY_TOKEN`) already
+   prefilled. Paste the token, save, and you're done.
 
 ## Step 3 — map your Sentry projects to GitHub repos
 
@@ -234,8 +228,6 @@ If you're running your own Mur deployment, you need:
 
 | Env var | What it is |
 |---|---|
-| `SENTRY_CLIENT_SECRET` | The Client Secret from Step 1's Internal Integration |
-| `SENTRY_DEFAULT_DEVELOPER_ID` | Single-tenant ingest: the developer id every Sentry delivery is attributed to. Set this to the operator's developer id. |
 | `SENTRY_AUTOFIX_FLOW_ID` | The published Flow.id of `examples/sentry-autofix/sentry-autofix.js`. Pin after running `prod-e2e --flow sentry-autofix` once. |
 
 The Lit Action's publisher vault also needs:
@@ -245,9 +237,6 @@ The Lit Action's publisher vault also needs:
 | `ANTHROPIC_API_KEY` | Auth for the managed-agents API |
 | `MANAGED_AGENT_ID` | Anthropic managed-agent definition with Bash + git + Node tools |
 | `MANAGED_ENV_ID` | Sandbox environment with unrestricted networking |
-
-Without `SENTRY_DEFAULT_DEVELOPER_ID` set, the route returns 404 so
-Sentry retries instead of silently dropping deliveries.
 
 ## Revoking access
 
@@ -276,8 +265,8 @@ side until it terminates naturally — the platform stops processing
 
 The actual implementation:
 
-- **Webhook ingest:** `src/api/routes/webhook.routes.ts` (HMAC verify,
-  ingest into `WebhookEvent`)
+- **Webhook ingest:** `src/api/routes/webhook.routes.ts` (per-dev
+  URL token attribution, ingest into `WebhookEvent`)
 - **Handler:** `src/services/webhooks/sentry.handler.ts` (gate, claim,
   debit, spawn, marker lifecycle)
 - **Coding-agent orchestrator:** `src/services/codingAgent.service.ts`
