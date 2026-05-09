@@ -16,7 +16,7 @@ flow is enabled and configured, every new Sentry issue runs through it.
 > `<base>/api/webhooks/sentry/t/<token>` into a Sentry Internal
 > Integration in their own org. URL secrecy is the auth — no HMAC.
 > The Sentry auth token from that integration goes into the user's
-> Mur vault as `SENTRY_TOKEN` (used by the agent for richer issue
+> Mur vault as `SENTRY_AUTH_TOKEN` (used by the agent for richer issue
 > context). HMAC verification can be layered on later when we
 > graduate to a public Sentry Integration with OAuth.
 
@@ -113,7 +113,7 @@ In your Sentry org's dashboard:
 6. **Save.** Copy the integration's **auth token** shown after
    creation.
 7. Open `setupInstructions.vaultUrl` in your browser — it deeplinks to
-   the Mur vault with the secret name (`SENTRY_TOKEN`) already
+   the Mur vault with the secret name (`SENTRY_AUTH_TOKEN`) already
    prefilled. Paste the token, save, and you're done.
 
 ## Step 3 — map your Sentry projects to GitHub repos
